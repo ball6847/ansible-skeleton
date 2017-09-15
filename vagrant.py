@@ -11,17 +11,18 @@ from sys import exit                     # exiting early on error
 import re                                # role decisions
 import subprocess                        # output from `vagrant-ssh`
 import parsimonious                      # parsing said output
-from parsimonious.nodes import RegexNode # generic visit/parse for regexes
+from parsimonious.nodes import RegexNode  # generic visit/parse for regexes
 import json                              # dumping parsed output to inventory
 import logging                           # log errors to file w/o printing them
 
 # To log during testing, this must be configured outside __main__
 logging.basicConfig(filename="vagrant.py.log", level=logging.INFO,
-        filemode="w")
+                    filemode="w")
 
 VERSION = '0.1pre'
 
 ### PARSING ###
+
 
 class Walker(parsimonious.NodeVisitor):
     """ This class will traverse the parsimonious parse tree, depth-first.
@@ -30,6 +31,7 @@ class Walker(parsimonious.NodeVisitor):
     the child nodes of the current one (node). It is often unpacked to ignore
     whitespace, etc.
     """
+
     def __init__(self, grammar):
         """ Give this Walker a default parsing grammar """
         self.grammar = grammar
@@ -48,11 +50,11 @@ class Walker(parsimonious.NodeVisitor):
         first child.
         """
         if isinstance(node, RegexNode):
-            logging.debug("visiting regex node " +  node.expr_name)
+            logging.debug("visiting regex node " + node.expr_name)
             return node.match.group(0)
         else:
-            logging.debug("visiting generic node " +  node.expr_name + " : "
-                    + repr(node.text))
+            logging.debug("visiting generic node " + node.expr_name + " : "
+                          + repr(node.text))
             return children
 
     def visit_block(self, node, child_results):
@@ -66,7 +68,7 @@ class Walker(parsimonious.NodeVisitor):
             lst = [first_line] + flattened_rest + [last_line[0]]
         else:
             lst = [first_line] + flattened_rest
-        return {k: v for (k, v) in lst }
+        return {k: v for (k, v) in lst}
 
     def visit_first_line(self, node, child_results):
         """ Just take the key and value from the first line """
@@ -98,6 +100,7 @@ class Walker(parsimonious.NodeVisitor):
             # This should never happen, and might indicate a bug in parsimonious
             # The "[0-9]" regex should take care of any non-integer string.
             logging.warning("Couldn't parse port, removing line: " + node.text)
+
 
 def get_host_dicts(full_text):
     """ Return a list of dictionaries representing vagrant VMs (hosts).
@@ -132,11 +135,12 @@ def get_host_dicts(full_text):
       port_number    = ~"[0-9]{1,5}"
     """)).match(full_text)
 
+
 def ssh_config_output(work_dir):
     """ Just get the output of `vagrant ssh-config` as a str """
     args = ["vagrant", "ssh-config"]
     proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd=work_dir)
+                            stderr=subprocess.PIPE, cwd=work_dir)
     stdout, stderr = map(lambda x: x.decode("utf-8"), proc.communicate())
     proc.wait()
     # Log errors, return empty string
@@ -150,6 +154,7 @@ def ssh_config_output(work_dir):
 
 ### INVENTORY CONSTRUCTION ###
 
+
 def get_role(host_dict):
     """ Return "control", "worker", or "" depending on regex match """
     hostname = host_dict["Host"]
@@ -159,14 +164,30 @@ def get_role(host_dict):
         return "worker"
     return ""
 
+
 def get_groups(host_dicts):
     """ Return a dictionary of groups, with keys being group names and values
     being lists of hostnames in that group """
+
+    groups = {
+        "all": []
+    }
+
+    # default group "all"
+    for host_dict in host_dicts:
+        hostname = host_dict["Host"]
+        groups["all"].append(hostname)
+
+    # read additional group mapping from vagrant_map.json if any
     try:
         map_file = open('vagrant_map.json')
+        vagrant_map = json.load(map_file)
+        groups.update(vagrant_map)
     except IOError:
-        return {}
-    return json.load(map_file)
+        pass
+
+    return groups
+
 
 def generic_hostvars(host_dict):
     """ Return a dictionary of generic host variables to be listed under this
@@ -176,9 +197,10 @@ def generic_hostvars(host_dict):
         "ansible_ssh_port": host_dict["Port"],
         "ansible_ssh_host": host_dict["HostName"]
     }
-    if "IdentityFile" in hostvars_dict:
-        hostvars_dict["ansible_ssh_private_key_file"] = hostvars_dict["IdentityFile"]
+    if "IdentityFile" in host_dict:
+        hostvars_dict["ansible_ssh_private_key_file"] = host_dict["IdentityFile"]
     return hostvars_dict
+
 
 def mantl_hostvars(host_dict):
     """ Return a dictionary of mantl-specific host variables to be listed under
@@ -192,10 +214,12 @@ def mantl_hostvars(host_dict):
         "consul_is_server": role == "control",
     }
 
+
 def group_hostvars(host_dict, groups):
     """ DEPRECATED: Return a dictionary of host variables that can be deduced from the
     groups that this host belongs to """
     return {}
+
 
 def inventory(host_dicts, mantl_specific=False):
     """ Construct a dictionary representing a valid Ansible inventory """
@@ -211,23 +235,24 @@ def inventory(host_dicts, mantl_specific=False):
     # groups_json = { grp : { "hosts" : hs } for (grp, hs) in groups.items() }
 
     # Keys are hostnames, values are all their variables
-    hostvars = [ (d, generic_hostvars(d)) for d in host_dicts ]
+    hostvars = [(d, generic_hostvars(d)) for d in host_dicts]
     # Add mantl-specific variables if requested
     if mantl_specific:
         for (host_dict, vs) in hostvars:
             vs.update(mantl_hostvars(host_dict))
             vs.update(group_hostvars(host_dict, groups))
-    hostvars_json = { d["Host"]: vs for (d, vs) in hostvars }
+    hostvars_json = {d["Host"]: vs for (d, vs) in hostvars}
 
     # Merge groups dictionary with properly formatted hostvars dictionary
     #hostvars_dict = { hostname : vrs for (hostname, vrs) in hostvars.items() }
-    return merge_dicts(groups, { "_meta": { "hostvars": hostvars_json } })
+    return merge_dicts(groups, {"_meta": {"hostvars": hostvars_json}})
 
 ### EXECUTING ###
 
+
 def main():
     parser = argparse.ArgumentParser(__file__, __doc__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--list',
                        action='store_true',
@@ -252,7 +277,7 @@ def main():
         print('%s %s' % (__file__, VERSION))
     elif args.list:
         iv = inventory(get_host_dicts(ssh_config_output(args.root)),
-                mantl_specific=True)
+                       mantl_specific=True)
         if args.nometa:
             del iv['_meta']
         print(json.dumps(iv, indent=4 if args.pretty else None))
@@ -267,6 +292,7 @@ def main():
     else:
         print("Please specify either --list or --host")
     parser.exit()
+
 
 if __name__ == '__main__':
     try:
