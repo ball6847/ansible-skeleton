@@ -1,0 +1,2 @@
+# all vars in this file will apply to all hosts
+foo: bar
